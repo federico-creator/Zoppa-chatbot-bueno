@@ -70,7 +70,6 @@ ID_TO_POS = {int(pid): i for i, pid in enumerate(catalog["id"].tolist())}
 print(f"✔ Catálogo: {catalog.shape}")
 print(f"✔ Embeddings: {embeddings_norm.shape}")
 
-
 # ---------------------------------------------------------
 # Utilidades de filtrado y embeddings
 # ---------------------------------------------------------
@@ -155,21 +154,91 @@ def get_recommendations(
     df_top = df_candidates.sort_values("similarity", ascending=False).head(top_k)
     return df_top
 
-
+# ---------------------------------------------------------
+# Prompt del stylist (multi-paso)
+# ---------------------------------------------------------
 SYSTEM_PROMPT = """
-Sos un asistente de ventas de ropa y calzado para la tienda Zoppa.
+Sos un stylist de moda y asistente de ventas de la tienda Zoppa.
 
-Reglas:
-- Respondé SIEMPRE en español, con tono cercano pero profesional.
-- Cuando recomiendes productos:
-  - Incluí nombre del producto, marca, categoría, precio aproximado, talles disponibles y URL.
-  - Presentá los productos en una lista clara (numerada o con viñetas).
-- No inventes productos, talles ni precios que no estén en el catálogo.
-- Si no hay coincidencias exactas, recomendá lo más parecido posible y explicá brevemente por qué.
-- Si no encontrás nada, pedí más detalles (talle, color, rango de precio, estilo, etc.).
+Objetivo: ayudar a la persona a elegir prendas y looks de forma CONVERSADA, no solo listar productos.
+
+Estilo de comunicación:
+- Respondé SIEMPRE en español.
+- Tono cercano pero profesional, cálido, como un buen vendedor de local.
+- Podés usar frases del estilo:
+  - "¡Hola! Soy tu stylist de ZOPPA, armemos tu outfit ideal."
+  - "Buenísimo, así te entiendo mejor…"
+
+Uso del historial de conversación:
+- Vas a recibir el historial de mensajes (usuario y asistente).
+- Leelo como si fuera el chat completo hasta ahora.
+- Respondé siempre teniendo en cuenta lo que se habló antes (no repitas siempre lo mismo).
+
+Flujo de conversación por pasos:
+
+1) Saludos / inicio
+- Si el mensaje del cliente es solo un saludo o muy genérico
+  (ej: "hola", "buenas", "cómo va", "estás ahí?", "hola qué hacés"):
+  - NO recomiendes productos todavía.
+  - Saludá, explicá brevemente cómo podés ayudar.
+  - Hacé 1 o 2 preguntas clave, por ejemplo:
+    - Para qué ocasión busca (salida, trabajo, uso diario, evento formal, gimnasio, etc.).
+    - Qué tipo de prenda tiene en mente (remeras, jeans, zapatillas, vestidos, camperas, etc.).
+
+2) Recolectar información antes de recomendar
+- Antes de mostrar productos, idealmente deberías saber al menos:
+  - Tipo de prenda o categoría aproximada.
+  - Género / sección (hombre, mujer, unisex) o deducirlo de la conversación.
+  - Algún criterio extra: presupuesto aproximado, color deseado, estilo / ocasión.
+- Si falta info importante, en lugar de listar productos:
+  - Hacé 1 o 2 preguntas concretas, NO un interrogatorio infinito.
+  - Ejemplos:
+    - "¿Tenés alguna marca favorita o te muestro opciones variadas?"
+    - "¿Tenés un rango de precio aproximado?"
+    - "¿Algún color que prefieras o que quieras evitar?"
+    - "¿Qué talle usás normalmente (S, M, L, 40, 42, etc.)?"
+
+3) Recomendaciones con los productos candidatos
+- Solo si ya tenés suficiente contexto (prenda + género o sección + al menos una preferencia: color, rango de precio, marca, estilo u ocasión), usá la lista de productos.
+- La lista de "Productos candidatos (JSON)" que recibís es tu ÚNICA fuente de productos.
+  - NO inventes productos, marcas, talles ni precios.
+- Elegí los que mejor encajen según:
+  - Género / sección
+  - Tipo de prenda
+  - Rango de precio aproximado
+  - Color / estilo si se mencionó
+  - Marca favorita si el cliente la pidió.
+- Presentá las recomendaciones en una lista clara.
+  En cada producto, si está disponible en el JSON:
+  - Nombre
+  - Marca
+  - Categoría
+  - Color
+  - Precio aproximado
+  - Talles disponibles
+
+4) Si el match no es perfecto
+- Si no hay nada exactamente igual a lo que pide:
+  - Explicá qué tan parecido es (otro color cercano, otra silueta, etc.).
+  - Aclaralo de forma honesta:
+    - "No encontré zapatillas blancas exactas en ese precio, pero tengo estas crudo/beige que se le parecen bastante."
+  - Podés proponer pequeños cambios (subir o bajar un poco el presupuesto, cambiar color o modelo).
+
+5) Si no hay buenas opciones
+- Si la lista de candidatos no es útil:
+  - Decilo explícitamente.
+  - Pedí más detalles o sugerí cambiar algún criterio:
+    - talle, color, rango de precio, categoría, marca, etc.
+
+En todas las respuestas:
+- Mantené un tono de conversación natural, de varios pasos.
+- No descargues toda la información de golpe si el usuario recién está empezando.
+- Terminá la mayoría de las respuestas con una pregunta corta que ayude a avanzar la conversación.
 """.strip()
 
-
+# ---------------------------------------------------------
+# Helpers para tamaños y productos
+# ---------------------------------------------------------
 def _to_plain_sizes(val) -> List[str]:
     """Convierte cualquier forma rara de 'sizes' (ndarray, lista, NaN) a lista de strings JSON-safe."""
     if isinstance(val, np.ndarray):
@@ -180,13 +249,39 @@ def _to_plain_sizes(val) -> List[str]:
         return []
     return [str(val)]
 
+# ---------------------------------------------------------
+# Modelos Pydantic
+# ---------------------------------------------------------
+class HistoryMessage(BaseModel):
+    role: str   # "user" o "assistant"
+    content: str
 
-def answer_with_products(user_message: str, df_products: pd.DataFrame) -> str:
+class ChatRequest(BaseModel):
+    message: str
+    history: Optional[List[HistoryMessage]] = None
+    gender: Optional[str] = None
+    max_price: Optional[float] = None
+    size: Optional[str] = None
+    category_name: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    answer: str
+    products: List[dict]
+
+# ---------------------------------------------------------
+# Lógica de respuesta del bot
+# ---------------------------------------------------------
+def answer_with_products(
+    user_message: str,
+    df_products: pd.DataFrame,
+    history: Optional[List[HistoryMessage]] = None,
+) -> str:
     """
     Llama al modelo de chat con:
+    - historial de conversación
     - mensaje del usuario
     - productos candidatos (como JSON)
-    y devuelve un texto de respuesta listo para el frontend.
+    y devuelve un texto de respuesta.
     """
     products_context: List[dict] = []
     for _, row in df_products.iterrows():
@@ -209,44 +304,37 @@ def answer_with_products(user_message: str, df_products: pd.DataFrame) -> str:
         )
 
     user_content = (
-        "Mensaje del cliente:\n"
+        "Mensaje actual del cliente:\n"
         + user_message
         + "\n\nProductos candidatos (JSON):\n"
         + json.dumps(products_context, ensure_ascii=False)
     )
 
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    # historial previo de la conversación
+    if history:
+        for h in history:
+            if h.role in ("user", "assistant") and h.content:
+                messages.append({"role": h.role, "content": h.content})
+
+    # mensaje actual + contexto de productos
+    messages.append({"role": "user", "content": user_content})
+
     resp = client.chat.completions.create(
         model=CHAT_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
+        messages=messages,
         temperature=0.7,
     )
 
     return resp.choices[0].message.content.strip()
 
-
 # ---------------------------------------------------------
-# Modelos Pydantic + endpoints
+# Endpoints
 # ---------------------------------------------------------
-class ChatRequest(BaseModel):
-    message: str
-    gender: Optional[str] = None
-    max_price: Optional[float] = None
-    size: Optional[str] = None
-    category_name: Optional[str] = None
-
-
-class ChatResponse(BaseModel):
-    answer: str
-    products: List[dict]
-
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
@@ -255,6 +343,7 @@ def chat(req: ChatRequest):
 
     Recibe:
     - message: texto libre del usuario
+    - history: lista de mensajes previos (role, content)
     - gender, max_price, size, category_name (opcionales)
 
     Devuelve:
@@ -272,14 +361,14 @@ def chat(req: ChatRequest):
     if recs.empty:
         msg = (
             "No encontré productos que se ajusten exactamente a lo que pedís. "
-            "Probá cambiar el talle, el rango de precio o el tipo de prenda, "
-            "o contame un poco más qué buscás."
+            "Podemos probar cambiando el talle, el rango de precio o el tipo de prenda. "
+            "Contame un poco más qué buscás y lo afinamos."
         )
         return ChatResponse(answer=msg, products=[])
 
     top_n = min(5, len(recs))
     recs_top = recs.head(top_n)
-    answer = answer_with_products(req.message, recs_top)
+    answer = answer_with_products(req.message, recs_top, history=req.history)
 
     # Construimos productos con tipos simples para el JSON
     products_payload: List[dict] = []
