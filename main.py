@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
+from fastapi.middleware.cors import CORSMiddleware
 
 
 # ---------------------------------------------------------
@@ -32,7 +33,21 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ---------------------------------------------------------
 app = FastAPI(title="Zoppa Chatbot API")
 
+app = FastAPI(title="Zoppa Chatbot API")
 
+origins = [
+    "http://localhost:5173",          # Next local
+    "https://zoppa-app.vercel.app/",    # tu dominio de Vercel
+    "https://zoppashop.com/",      # dominio real
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # ---------------------------------------------------------
 # Cargar catálogo + embeddings
 # ---------------------------------------------------------
