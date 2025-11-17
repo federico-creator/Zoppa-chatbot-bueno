@@ -5,3 +5,5 @@ numpy
 python-dotenv
 openai
 langsmith
+pyarrow
+fastparquet
