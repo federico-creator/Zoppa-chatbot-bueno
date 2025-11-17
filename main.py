@@ -12,7 +12,6 @@ from pydantic import BaseModel
 from openai import OpenAI
 from fastapi.middleware.cors import CORSMiddleware
 
-
 # ---------------------------------------------------------
 # Carga de variables de entorno
 # ---------------------------------------------------------
@@ -27,18 +26,16 @@ CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-
 # ---------------------------------------------------------
-# FastAPI app
+# FastAPI app + CORS
 # ---------------------------------------------------------
-app = FastAPI(title="Zoppa Chatbot API")
-
 app = FastAPI(title="Zoppa Chatbot API")
 
 origins = [
-    "http://localhost:5173",          # Next local
-    "https://zoppa-app.vercel.app/",    # tu dominio de Vercel
-    "https://zoppashop.com/",      # dominio real
+    "http://localhost:5173",          # frontend local (Vite)
+    "http://localhost:3000",          # por si usás Next local más adelante
+    "https://zoppa-app.vercel.app",   # dominio de Vercel (sin /)
+    "https://zoppashop.com",          # dominio real (sin /)
 ]
 
 app.add_middleware(
@@ -48,6 +45,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # ---------------------------------------------------------
 # Cargar catálogo + embeddings
 # ---------------------------------------------------------
