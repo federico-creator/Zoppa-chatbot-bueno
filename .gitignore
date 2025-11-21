@@ -2,3 +2,7 @@
 .data/cache/
 logs/
 data/
+*.csv
+MEJORAS_CHATBOT.md
+prueba.py
+test_chatbot.py
