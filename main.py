@@ -36,7 +36,7 @@ origins = [
     "http://localhost:3000",          
     "https://zoppa-app.vercel.app",   
     "https://zoppashop.com",   
-    "https://www.zoppashop.com/"       
+    "https://www.zoppashop.com"       
 ]
 
 app.add_middleware(
