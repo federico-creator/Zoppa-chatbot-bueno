@@ -22,7 +22,7 @@ if not OPENAI_API_KEY:
     raise RuntimeError("Falta OPENAI_API_KEY en el entorno")
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-5")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4o-mini")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
